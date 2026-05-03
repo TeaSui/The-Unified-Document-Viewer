@@ -145,3 +145,142 @@ func TestService_DocumentsSortedByDateDescending(t *testing.T) {
 		}
 	}
 }
+
+type fakeCache struct {
+	data map[string]fakeCacheEntry
+}
+
+type fakeCacheEntry struct {
+	docs      []domain.Document
+	fetchedAt time.Time
+}
+
+func newFakeCache() *fakeCache {
+	return &fakeCache{data: make(map[string]fakeCacheEntry)}
+}
+
+func (f *fakeCache) Get(_ context.Context, vin, source string) ([]domain.Document, time.Time, error) {
+	entry, ok := f.data[vin+":"+source]
+	if !ok {
+		return nil, time.Time{}, nil
+	}
+	return entry.docs, entry.fetchedAt, nil
+}
+
+func (f *fakeCache) Put(_ context.Context, vin, source string, docs []domain.Document) error {
+	f.data[vin+":"+source] = fakeCacheEntry{docs: docs, fetchedAt: time.Now()}
+	return nil
+}
+
+func TestService_OneFailsWithCache_ReturnsStale(t *testing.T) {
+	cache := newFakeCache()
+	cachedTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	cache.data["1HGCM82633A004352:service"] = fakeCacheEntry{
+		docs:      []domain.Document{{ID: "CACHED-V1", Source: "service"}},
+		fetchedAt: cachedTime,
+	}
+
+	sales := &fakeSource{
+		name: "sales",
+		docs: []domain.Document{{ID: "S1", Source: "sales", Date: time.Now()}},
+	}
+	service := &fakeSource{
+		name: "service",
+		err:  fmt.Errorf("upstream service returned status 500"),
+	}
+
+	svc := aggregator.NewService([]aggregator.Source{sales, service}, aggregator.WithCache(cache))
+	result, err := svc.Aggregate(context.Background(), "1HGCM82633A004352")
+
+	if err != nil {
+		t.Fatalf("should not return error: %v", err)
+	}
+	if len(result.Documents) != 2 {
+		t.Fatalf("expected 2 documents (1 live + 1 cached), got %d", len(result.Documents))
+	}
+
+	var serviceStatus domain.SourceStatus
+	for _, s := range result.Sources {
+		if s.Name == "service" {
+			serviceStatus = s
+		}
+	}
+	if serviceStatus.Status != "stale" {
+		t.Errorf("expected service status 'stale', got '%s'", serviceStatus.Status)
+	}
+	if serviceStatus.FetchedAt == nil || !serviceStatus.FetchedAt.Equal(cachedTime) {
+		t.Errorf("expected fetched_at %v, got %v", cachedTime, serviceStatus.FetchedAt)
+	}
+}
+
+func TestService_BothFailWithCache_ReturnsStale(t *testing.T) {
+	cache := newFakeCache()
+	cachedTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	cache.data["1HGCM82633A004352:sales"] = fakeCacheEntry{
+		docs:      []domain.Document{{ID: "CACHED-S1", Source: "sales"}},
+		fetchedAt: cachedTime,
+	}
+	cache.data["1HGCM82633A004352:service"] = fakeCacheEntry{
+		docs:      []domain.Document{{ID: "CACHED-V1", Source: "service"}},
+		fetchedAt: cachedTime,
+	}
+
+	sales := &fakeSource{name: "sales", err: fmt.Errorf("connection refused")}
+	service := &fakeSource{name: "service", err: fmt.Errorf("timeout")}
+
+	svc := aggregator.NewService([]aggregator.Source{sales, service}, aggregator.WithCache(cache))
+	result, err := svc.Aggregate(context.Background(), "1HGCM82633A004352")
+
+	if err != nil {
+		t.Fatalf("should not return error when cache exists: %v", err)
+	}
+	if len(result.Documents) != 2 {
+		t.Fatalf("expected 2 cached documents, got %d", len(result.Documents))
+	}
+	for _, s := range result.Sources {
+		if s.Status != "stale" {
+			t.Errorf("expected source %s status 'stale', got '%s'", s.Name, s.Status)
+		}
+	}
+}
+
+func TestService_BothFailNoCache_ReturnsError(t *testing.T) {
+	cache := newFakeCache()
+
+	sales := &fakeSource{name: "sales", err: fmt.Errorf("connection refused")}
+	service := &fakeSource{name: "service", err: fmt.Errorf("timeout")}
+
+	svc := aggregator.NewService([]aggregator.Source{sales, service}, aggregator.WithCache(cache))
+	_, err := svc.Aggregate(context.Background(), "1HGCM82633A004352")
+
+	if err == nil {
+		t.Fatal("expected error when all fail and no cache")
+	}
+}
+
+func TestService_SuccessCachesDocuments(t *testing.T) {
+	cache := newFakeCache()
+
+	sales := &fakeSource{
+		name: "sales",
+		docs: []domain.Document{{ID: "S1", Source: "sales", Date: time.Now()}},
+	}
+	service := &fakeSource{
+		name: "service",
+		docs: []domain.Document{{ID: "V1", Source: "service", Date: time.Now()}},
+	}
+
+	svc := aggregator.NewService([]aggregator.Source{sales, service}, aggregator.WithCache(cache))
+	_, err := svc.Aggregate(context.Background(), "1HGCM82633A004352")
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, ok := cache.data["1HGCM82633A004352:sales"]; !ok {
+		t.Error("expected sales docs to be cached")
+	}
+	if _, ok := cache.data["1HGCM82633A004352:service"]; !ok {
+		t.Error("expected service docs to be cached")
+	}
+}
