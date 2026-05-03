@@ -11,7 +11,7 @@ import (
 
 func newTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dbURL := "postgres://docviewer:docviewer@localhost:5432/docviewer?sslmode=disable"
+	dbURL := "postgres://docviewer:docviewer@localhost:5433/docviewer?sslmode=disable"
 	pool, err := pgxpool.New(context.Background(), dbURL)
 	if err != nil {
 		t.Skipf("cannot connect to test database: %v", err)
