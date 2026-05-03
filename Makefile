@@ -1,4 +1,4 @@
-.PHONY: up down build test smoke lint
+.PHONY: up down build test smoke lint migrate-up migrate-down migrate-status
 
 up:
 	docker compose up --build -d
@@ -24,3 +24,12 @@ smoke:
 
 lint:
 	golangci-lint run ./...
+
+migrate-up:
+	goose -dir migrations postgres "postgres://docviewer:docviewer@localhost:5433/docviewer?sslmode=disable" up
+
+migrate-down:
+	goose -dir migrations postgres "postgres://docviewer:docviewer@localhost:5433/docviewer?sslmode=disable" down
+
+migrate-status:
+	goose -dir migrations postgres "postgres://docviewer:docviewer@localhost:5433/docviewer?sslmode=disable" status

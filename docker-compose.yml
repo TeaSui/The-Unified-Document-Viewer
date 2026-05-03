@@ -15,6 +15,15 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
 
+  migrate:
+    image: ghcr.io/pressly/goose:latest
+    volumes:
+      - ./migrations:/migrations
+    command: ["-dir", "/migrations", "postgres", "postgres://docviewer:docviewer@postgres:5432/docviewer?sslmode=disable", "up"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   sales-mock:
     image: wiremock/wiremock:3.10.0
     ports:
@@ -53,6 +62,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       sales-mock:
         condition: service_healthy
       service-mock:
