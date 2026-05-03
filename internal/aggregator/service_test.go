@@ -284,3 +284,50 @@ func TestService_SuccessCachesDocuments(t *testing.T) {
 		t.Error("expected service docs to be cached")
 	}
 }
+
+func TestService_DeadlineExceeded(t *testing.T) {
+	sales := &fakeSource{
+		name: "sales",
+		docs: []domain.Document{{ID: "S1", Source: "sales", Date: time.Now()}},
+	}
+	service := &fakeSource{
+		name: "service",
+		docs: []domain.Document{{ID: "V1", Source: "service", Date: time.Now()}},
+	}
+
+	svc := aggregator.NewService(
+		[]aggregator.Source{sales, service},
+		aggregator.WithDeadline(50*time.Millisecond),
+	)
+
+	result, err := svc.Aggregate(context.Background(), "1HGCM82633A004352")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Documents) != 2 {
+		t.Errorf("expected 2 docs, got %d", len(result.Documents))
+	}
+}
+
+func TestService_WithDeadlineOption(t *testing.T) {
+	sales := &fakeSource{
+		name: "sales",
+		docs: []domain.Document{{ID: "S1", Source: "sales", Date: time.Now()}},
+	}
+	service := &fakeSource{
+		name: "service",
+		docs: []domain.Document{{ID: "V1", Source: "service", Date: time.Now()}},
+	}
+
+	svc := aggregator.NewService(
+		[]aggregator.Source{sales, service},
+		aggregator.WithDeadline(5*time.Second),
+	)
+	result, err := svc.Aggregate(context.Background(), "1HGCM82633A004352")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Documents) != 2 {
+		t.Errorf("expected 2 docs, got %d", len(result.Documents))
+	}
+}

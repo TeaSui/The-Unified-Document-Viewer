@@ -29,9 +29,16 @@ func WithCache(cache Cache) Option {
 	}
 }
 
+func WithDeadline(d time.Duration) Option {
+	return func(s *Service) {
+		s.deadline = d
+	}
+}
+
 type Service struct {
-	sources []Source
-	cache   Cache
+	sources  []Source
+	cache    Cache
+	deadline time.Duration
 }
 
 func NewService(sources []Source, opts ...Option) *Service {
@@ -43,6 +50,12 @@ func NewService(sources []Source, opts ...Option) *Service {
 }
 
 func (s *Service) Aggregate(ctx context.Context, vin string) (*domain.AggregateResult, error) {
+	if s.deadline > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.deadline)
+		defer cancel()
+	}
+
 	results := make([]domain.SourceResult, len(s.sources))
 	var wg sync.WaitGroup
 
