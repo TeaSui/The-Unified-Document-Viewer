@@ -1,0 +1,197 @@
+openapi: 3.1.0
+info:
+  title: Unified Document Viewer API
+  description: |
+    Aggregates vehicle documents from multiple dealership systems (Sales, Service)
+    into a single response, tagged by source. Supports partial-success semantics
+    when one upstream is unavailable.
+  version: 1.0.0
+  contact:
+    name: Tung Nguyen
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+paths:
+  /healthz:
+    get:
+      summary: Liveness probe
+      description: Returns 200 if the service process is running.
+      operationId: getLiveness
+      tags: [health]
+      responses:
+        "200":
+          description: Service is alive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /readyz:
+    get:
+      summary: Readiness probe
+      description: Returns 200 if the service can accept traffic (database connected).
+      operationId: getReadiness
+      tags: [health]
+      responses:
+        "200":
+          description: Service is ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "503":
+          description: Service is not ready (database unavailable)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /vehicles/{vin}/documents:
+    get:
+      summary: Get all documents for a vehicle
+      description: |
+        Fetches documents from all upstream systems in parallel and returns a
+        consolidated list. Each document is tagged with its source system.
+        Partial success is supported — if one upstream fails, documents from
+        the healthy upstream are still returned with per-source status.
+      operationId: getVehicleDocuments
+      tags: [documents]
+      parameters:
+        - name: vin
+          in: path
+          required: true
+          description: 17-character Vehicle Identification Number (ISO 3779)
+          schema:
+            type: string
+            pattern: "^[A-HJ-NPR-Z0-9]{17}$"
+            example: "1HGCM82633A004352"
+      responses:
+        "200":
+          description: Documents retrieved (may be partial success — check sources array)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentsEnvelope"
+        "400":
+          description: Invalid VIN format
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: All upstream sources failed and no cached data available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, unavailable]
+        reason:
+          type: string
+
+    DocumentsEnvelope:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [vin, documents, sources]
+          properties:
+            vin:
+              type: string
+              pattern: "^[A-HJ-NPR-Z0-9]{17}$"
+            documents:
+              type: array
+              items:
+                $ref: "#/components/schemas/Document"
+            sources:
+              type: array
+              items:
+                $ref: "#/components/schemas/SourceStatus"
+        meta:
+          $ref: "#/components/schemas/ResponseMeta"
+
+    Document:
+      type: object
+      required: [id, vin, source, type, title, date]
+      properties:
+        id:
+          type: string
+          description: Unique document identifier from the source system
+        vin:
+          type: string
+        source:
+          type: string
+          enum: [sales, service]
+          description: Which upstream system produced this document
+        type:
+          type: string
+          description: Document type classification
+          examples: [purchase_agreement, finance_contract, service_record, inspection_report]
+        title:
+          type: string
+        date:
+          type: string
+          format: date-time
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Source-specific metadata (varies by document type)
+
+    SourceStatus:
+      type: object
+      required: [name, status]
+      properties:
+        name:
+          type: string
+          enum: [sales, service]
+        status:
+          type: string
+          enum: [ok, failed, timeout, stale]
+        error:
+          type: string
+          description: Human-readable error description (present when status != ok)
+        fetched_at:
+          type: string
+          format: date-time
+          description: When cached data was originally fetched (present when status = stale)
+
+    ResponseMeta:
+      type: object
+      required: [request_id, timestamp]
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              examples: [invalid_vin, upstream_failure]
+            message:
+              type: string
+            details:
+              type: array
+              items:
+                type: object
+                additionalProperties: true
