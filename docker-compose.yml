@@ -16,10 +16,15 @@ services:
       - pgdata:/var/lib/postgresql/data
 
   migrate:
-    image: ghcr.io/pressly/goose:latest
+    image: postgres:16-alpine
     volumes:
       - ./migrations:/migrations
-    command: ["-dir", "/migrations", "postgres", "postgres://docviewer:docviewer@postgres:5432/docviewer?sslmode=disable", "up"]
+    entrypoint: ["sh", "-c", "psql -f /migrations/init.sql"]
+    environment:
+      PGHOST: postgres
+      PGUSER: docviewer
+      PGPASSWORD: docviewer
+      PGDATABASE: docviewer
     depends_on:
       postgres:
         condition: service_healthy
