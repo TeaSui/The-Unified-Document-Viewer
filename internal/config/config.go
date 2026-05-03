@@ -17,6 +17,7 @@ type Config struct {
 	RetryBaseDelay   time.Duration
 	RequestDeadline  time.Duration
 	BreakerThreshold uint32
+	OTLPEndpoint     string
 }
 
 func Load() (*Config, error) {
@@ -45,6 +46,11 @@ func Load() (*Config, error) {
 	requestDeadline := parseDuration("REQUEST_DEADLINE_MS", 1500)
 	breakerThreshold := parseUint32("BREAKER_THRESHOLD", 5)
 
+	otlpEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	if otlpEndpoint == "" {
+		otlpEndpoint = "localhost:4317"
+	}
+
 	return &Config{
 		Port:             port,
 		DatabaseURL:      dbURL,
@@ -54,6 +60,7 @@ func Load() (*Config, error) {
 		RetryBaseDelay:   retryBaseDelay,
 		RequestDeadline:  requestDeadline,
 		BreakerThreshold: breakerThreshold,
+		OTLPEndpoint:     otlpEndpoint,
 	}, nil
 }
 

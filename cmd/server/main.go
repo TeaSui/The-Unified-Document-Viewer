@@ -16,6 +16,7 @@ import (
 	"github.com/tungnguyen/unified-document-viewer/internal/config"
 	"github.com/tungnguyen/unified-document-viewer/internal/documents"
 	"github.com/tungnguyen/unified-document-viewer/internal/health"
+	"github.com/tungnguyen/unified-document-viewer/internal/observability"
 	"github.com/tungnguyen/unified-document-viewer/internal/platform/postgres"
 	"github.com/tungnguyen/unified-document-viewer/internal/repository"
 	"github.com/tungnguyen/unified-document-viewer/internal/upstream"
@@ -39,6 +40,19 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
+
+	tp, err := observability.InitTracer(ctx, cfg.OTLPEndpoint)
+	if err != nil {
+		slog.Warn("tracing initialization failed, continuing without tracing", "error", err)
+	} else {
+		defer func() { _ = tp.Shutdown(ctx) }()
+	}
+
+	mp, metricsHandler, err := observability.InitMeter()
+	if err != nil {
+		return fmt.Errorf("initializing metrics: %w", err)
+	}
+	defer func() { _ = mp.Shutdown(ctx) }()
 
 	pool, err := postgres.NewPool(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -68,12 +82,15 @@ func run() error {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
+	r.Use(observability.TracingMiddleware)
+	r.Use(observability.LoggingMiddleware)
 	r.Use(middleware.Recoverer)
 
 	healthHandler := health.NewHandler(pool)
 	r.Get("/healthz", healthHandler.Liveness)
 	r.Get("/readyz", healthHandler.Readiness)
 	r.Get("/vehicles/{vin}/documents", docsHandler.GetDocuments)
+	r.Handle("/metrics", metricsHandler)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,
