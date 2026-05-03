@@ -3,6 +3,7 @@ package documents
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -16,15 +17,33 @@ type Aggregator interface {
 	Aggregate(ctx context.Context, vinStr string) (*domain.AggregateResult, error)
 }
 
-type Handler struct {
-	aggregator Aggregator
+type Audit interface {
+	Insert(ctx context.Context, entry domain.AuditEntry) error
 }
 
-func NewHandler(aggregator Aggregator) *Handler {
-	return &Handler{aggregator: aggregator}
+type HandlerOption func(*Handler)
+
+func WithAudit(audit Audit) HandlerOption {
+	return func(h *Handler) {
+		h.audit = audit
+	}
+}
+
+type Handler struct {
+	aggregator Aggregator
+	audit      Audit
+}
+
+func NewHandler(aggregator Aggregator, opts ...HandlerOption) *Handler {
+	h := &Handler{aggregator: aggregator}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
 func (h *Handler) GetDocuments(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	w.Header().Set("Content-Type", "application/json")
 
 	vinParam := chi.URLParam(r, "vin")
@@ -40,6 +59,9 @@ func (h *Handler) GetDocuments(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := h.aggregator.Aggregate(r.Context(), vinParam)
+
+	requestID := middleware.GetReqID(r.Context())
+
 	if err != nil {
 		w.WriteHeader(http.StatusBadGateway)
 		json.NewEncoder(w).Encode(domain.ErrorResponse{
@@ -48,10 +70,9 @@ func (h *Handler) GetDocuments(w http.ResponseWriter, r *http.Request) {
 				Message: "all upstream sources failed",
 			},
 		})
+		h.writeAudit(r.Context(), requestID, vinParam, http.StatusBadGateway, start, nil)
 		return
 	}
-
-	requestID := middleware.GetReqID(r.Context())
 
 	envelope := domain.DocumentsEnvelope{
 		Data: domain.DocumentsData{
@@ -67,4 +88,23 @@ func (h *Handler) GetDocuments(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(envelope)
+	h.writeAudit(r.Context(), requestID, vinParam, http.StatusOK, start, result.Sources)
+}
+
+func (h *Handler) writeAudit(ctx context.Context, requestID, vinStr string, status int, start time.Time, outcomes []domain.SourceStatus) {
+	if h.audit == nil {
+		return
+	}
+
+	entry := domain.AuditEntry{
+		RequestID:  requestID,
+		VIN:        vinStr,
+		HTTPStatus: status,
+		DurationMs: int(time.Since(start).Milliseconds()),
+		Outcomes:   outcomes,
+	}
+
+	if err := h.audit.Insert(ctx, entry); err != nil {
+		slog.Warn("audit write failed", "error", err, "request_id", requestID)
+	}
 }

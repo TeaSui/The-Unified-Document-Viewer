@@ -164,3 +164,47 @@ func TestHandler_PartialFailure_Returns200(t *testing.T) {
 		t.Errorf("expected service status 'failed', got '%s'", serviceSource.Status)
 	}
 }
+
+type fakeAudit struct {
+	entries []domain.AuditEntry
+}
+
+func (f *fakeAudit) Insert(_ context.Context, entry domain.AuditEntry) error {
+	f.entries = append(f.entries, entry)
+	return nil
+}
+
+func TestHandler_AuditLogWritten(t *testing.T) {
+	audit := &fakeAudit{}
+	agg := &fakeAggregator{
+		result: &domain.AggregateResult{
+			VIN:       "1HGCM82633A004352",
+			Documents: []domain.Document{{ID: "D1", Source: "sales"}},
+			Sources:   []domain.SourceStatus{{Name: "sales", Status: "ok"}},
+		},
+	}
+
+	handler := documents.NewHandler(agg, documents.WithAudit(audit))
+	r := newTestRouter(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/vehicles/1HGCM82633A004352/documents", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("expected 1 audit entry, got %d", len(audit.entries))
+	}
+	entry := audit.entries[0]
+	if entry.VIN != "1HGCM82633A004352" {
+		t.Errorf("expected VIN in audit, got %s", entry.VIN)
+	}
+	if entry.HTTPStatus != 200 {
+		t.Errorf("expected HTTP 200 in audit, got %d", entry.HTTPStatus)
+	}
+	if len(entry.Outcomes) != 1 {
+		t.Errorf("expected 1 outcome, got %d", len(entry.Outcomes))
+	}
+}
