@@ -55,3 +55,11 @@ type ErrorDetail struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
+
+type AuditEntry struct {
+	RequestID  string
+	VIN        string
+	HTTPStatus int
+	DurationMs int
+	Outcomes   []SourceStatus
+}
