@@ -49,13 +49,19 @@ func run() error {
 	cacheRepo := repository.NewCacheRepository(pool)
 	auditRepo := repository.NewAuditRepository(pool)
 
-	httpClient := &http.Client{Timeout: 5 * time.Second}
-	salesClient := upstream.NewClient(cfg.SalesMockURL, "sales", httpClient)
-	serviceClient := upstream.NewClient(cfg.ServiceMockURL, "service", httpClient)
+	resiliencyCfg := upstream.ResiliencyConfig{
+		Timeout:          cfg.UpstreamTimeout,
+		RetryBaseDelay:   cfg.RetryBaseDelay,
+		BreakerThreshold: cfg.BreakerThreshold,
+	}
+
+	salesClient := upstream.NewResilientClient(cfg.SalesMockURL, "sales", resiliencyCfg)
+	serviceClient := upstream.NewResilientClient(cfg.ServiceMockURL, "service", resiliencyCfg)
 
 	aggService := aggregator.NewService(
 		[]aggregator.Source{salesClient, serviceClient},
 		aggregator.WithCache(cacheRepo),
+		aggregator.WithDeadline(cfg.RequestDeadline),
 	)
 	docsHandler := documents.NewHandler(aggService, documents.WithAudit(auditRepo))
 
