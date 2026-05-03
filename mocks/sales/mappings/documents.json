@@ -63,7 +63,7 @@
       },
       "response": {
         "status": 200,
-        "fixedDelayMilliseconds": "{{request.headers.X-Mock-Latency}}",
+        "fixedDelayMilliseconds": 1000,
         "headers": {
           "Content-Type": "application/json"
         },

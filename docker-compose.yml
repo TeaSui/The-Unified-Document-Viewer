@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: docviewer
       POSTGRES_DB: docviewer
     ports:
-      - "5432:5432"
+      - "5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U docviewer -d docviewer"]
       interval: 2s
@@ -23,7 +23,7 @@ services:
       - ./mocks/sales/mappings:/home/wiremock/mappings
     command: ["--global-response-templating"]
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/__admin/mappings"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/__admin/mappings"]
       interval: 2s
       timeout: 3s
       retries: 5
@@ -36,7 +36,7 @@ services:
       - ./mocks/service/mappings:/home/wiremock/mappings
     command: ["--global-response-templating"]
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/__admin/mappings"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/__admin/mappings"]
       interval: 2s
       timeout: 3s
       retries: 5
@@ -58,7 +58,7 @@ services:
       service-mock:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/healthz"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/healthz"]
       interval: 3s
       timeout: 3s
       retries: 5
