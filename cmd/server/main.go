@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/redis/go-redis/v9"
 	"github.com/tungnguyen/unified-document-viewer/internal/aggregator"
 	"github.com/tungnguyen/unified-document-viewer/internal/config"
 	"github.com/tungnguyen/unified-document-viewer/internal/documents"
@@ -60,8 +62,34 @@ func run() error {
 	}
 	defer pool.Close()
 
-	cacheRepo := repository.NewCacheRepository(pool)
-	auditRepo := repository.NewAuditRepository(pool)
+	// Redis cache
+	redisOpts, err := redis.ParseURL(cfg.RedisURL)
+	if err != nil {
+		return fmt.Errorf("parsing redis URL: %w", err)
+	}
+	redisClient := redis.NewClient(redisOpts)
+	defer redisClient.Close()
+
+	if err := redisClient.Ping(ctx).Err(); err != nil {
+		return fmt.Errorf("connecting to redis: %w", err)
+	}
+	slog.Info("redis connected", "url", cfg.RedisURL)
+
+	cacheRepo := repository.NewRedisCacheRepository(redisClient, cfg.RedisCacheTTL)
+
+	// Kafka audit producer
+	kafkaBrokers := strings.Split(cfg.KafkaBrokers, ",")
+	auditRepo := repository.NewKafkaAuditRepository(kafkaBrokers, cfg.KafkaTopic)
+	defer auditRepo.Close()
+
+	// Kafka audit consumer (GORM → Postgres in background)
+	gormDB, err := repository.NewGormDB(cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("initializing GORM: %w", err)
+	}
+	auditConsumer := repository.NewAuditConsumer(kafkaBrokers, cfg.KafkaTopic, "audit-consumer", gormDB)
+	defer auditConsumer.Close()
+	go auditConsumer.Run(ctx)
 
 	resiliencyCfg := upstream.ResiliencyConfig{
 		Timeout:          cfg.UpstreamTimeout,

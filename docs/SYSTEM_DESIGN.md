@@ -36,12 +36,21 @@ The Unified Document Viewer is a backend aggregation service that consolidates v
 │  └───────────┬────────────┘          └──────────────┬─────────────────┘  │
 │              │                                      │                     │
 │  ┌───────────▼──────────────────────────────────────▼─────────────────┐  │
-│  │  Repository Layer: Audit (append-only) + Cache (stale-on-failure)   │  │
-│  └─────────────────────────────────┬──────────────────────────────────┘  │
-└────────────────────────────────────┼─────────────────────────────────────┘
-                                     │
-┌────────────────────────────────────▼─────────────────────────────────────┐
-│  PostgreSQL 16: audit_request + cached_response tables                    │
+│  │  Repository Layer                                                   │  │
+│  │    Cache: Redis 7 (TTL-based, stale-on-failure reads)               │  │
+│  │    Audit: Kafka producer → async (non-blocking request path)        │  │
+│  └──────────────┬──────────────────────────────┬─────────────────────┘  │
+│                 │                              │                         │
+│  ┌──────────────▼────────┐     ┌──────────────▼─────────────────────┐  │
+│  │  Kafka Consumer        │     │                                    │  │
+│  │  (background goroutine)│     │                                    │  │
+│  │  topic → Postgres      │     │                                    │  │
+│  └──────────────┬─────────┘     │                                    │  │
+└─────────────────┼───────────────┼────────────────────────────────────────┘
+                  │               │
+┌─────────────────▼───────────────▼────────────────────────────────────────┐
+│  Redis 7         │  Kafka (KRaft)   │  PostgreSQL 16                      │
+│  (cache layer)   │  (audit events)  │  (audit persistence)                │
 └──────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -58,11 +67,12 @@ The Unified Document Viewer is a backend aggregation service that consolidates v
 
 | Component | Responsibility |
 |-----------|---------------|
-| **Documents Handler** | HTTP layer: parse VIN from path, validate (ISO 3779), call aggregator, map result to envelope (200) or error (400/502), write audit log |
+| **Documents Handler** | HTTP layer: parse VIN from path, validate (ISO 3779), call aggregator, map result to envelope (200) or error (400/502), publish audit event |
 | **Aggregation Service** | Orchestrate parallel fan-out with overall deadline, collect results, fallback to cache on failure, merge documents, sort by date desc, build per-source status |
 | **Resilient Client** | Per-source HTTP client wrapping: context timeout (800ms) → circuit breaker (gobreaker) → retry once with jittered backoff |
-| **Cache Repository** | UPSERT last-known-good response per (VIN, source); GET returns nil on miss (not error) |
-| **Audit Repository** | Append-only insert: request_id, VIN, HTTP status, duration, per-source outcomes as JSONB |
+| **Redis Cache** | SET/GET with TTL (1h default) keyed by `cache:{vin}:{source}`; sub-millisecond stale-on-failure reads |
+| **Kafka Audit Producer** | Non-blocking publish to `audit-requests` topic; decouples audit from request path latency |
+| **Kafka Audit Consumer** | Background goroutine consuming from topic, persisting to Postgres via GORM (structured model with ON CONFLICT DO NOTHING) |
 | **Health Handlers** | `/healthz` (process liveness), `/readyz` (Postgres connectivity check) |
 | **Observability** | Tracing (OTel → Jaeger), metrics (OTel → Prometheus), structured JSON logging with correlation |
 
@@ -75,13 +85,14 @@ The Unified Document Viewer is a backend aggregation service that consolidates v
 4. Aggregator applies 1500ms overall deadline to context
 5. Two goroutines launch in parallel (non-cancelling fan-out)
 6. Each resilient client: applies 800ms timeout → circuit breaker check → HTTP call to mock
-7. Both succeed: documents merged, sorted by date descending, cached per source
+7. Both succeed: documents merged, sorted by date descending, cached to Redis (TTL 1h)
 8. Handler builds envelope: `{data: {vin, documents, sources}, meta: {request_id, timestamp}}`
-9. Audit entry written (best-effort, never blocks response)
+9. Audit event published to Kafka `audit-requests` topic (async, non-blocking)
 10. 200 OK returned
+11. Kafka consumer persists audit entry to Postgres (background, eventually consistent)
 
 ### Partial Failure (One Source Down)
-- Same as above, but failed source triggers cache lookup
+- Same as above, but failed source triggers Redis cache lookup
 - If cached: documents served with `status: "stale"` and `fetched_at` timestamp
 - If no cache: source marked `status: "failed"` with error message
 - Response is still 200 OK — partial success is visible in `sources[]` array
@@ -96,20 +107,26 @@ The Unified Document Viewer is a backend aggregation service that consolidates v
 |-----------|--------|---------------|
 | Language | Go 1.25 | `sync.WaitGroup` + `context.WithTimeout` makes fan-out concurrency explicit and visible. Single binary, fast boot (< 1s), small image. |
 | Router | chi v5 | Minimal, idiomatic, middleware-based. Far lighter than Gin/Echo for a single-endpoint BFF. |
-| Database | PostgreSQL 16 | Challenge requires persistence. JSONB for heterogeneous upstream responses. Reviewer-canonical. |
-| DB Driver | pgx v5 | Native protocol, strongly typed, better performance than database/sql + lib/pq. |
+| Database | PostgreSQL 16 | Persistent audit trail. JSONB for per-source outcomes. Durable store for the Kafka consumer. |
+| DB Driver | pgx v5 + GORM | pgx for connection pooling (health checks, direct queries); GORM for the Kafka consumer's audit persistence (ORM convenience for structured inserts). |
+| Cache | Redis 7 | Sub-millisecond reads for stale-on-failure. TTL-based expiry (1h default). Decouples cache tier from persistence tier. |
+| Message Broker | Apache Kafka (KRaft) | Decouples audit writes from request path. Async producer is non-blocking — audit never adds latency. Consumer writes to Postgres in background. |
 | Circuit Breaker | sony/gobreaker | Small, well-understood, zero deps. One instance per upstream. |
 | Mock Upstreams | WireMock 3.10 | Standalone HTTP, configurable fault injection via admin API, response templating for VIN-seeded data. |
 | Tracing | OpenTelemetry SDK + OTLP → Jaeger | Industry standard 2026. Parent/child spans show fan-out visually. |
 | Metrics | OTel SDK + Prometheus exporter | Per-upstream histograms (source × outcome) + RED per endpoint. |
 | Orchestration | Docker Compose v2 | Single `docker compose up` for the entire demo. Healthchecks + `depends_on: condition`. |
 
+### Why These Choices:
+- **Redis over Postgres for cache**: Sub-ms reads vs ~1ms from Postgres. TTL expiry is native (no cron job). At scale, Redis handles 100k+ ops/sec without connection pool pressure on the primary DB.
+- **Kafka over synchronous audit**: Removes DB write from the hot path. At 1000+ rps, synchronous INSERT would become the bottleneck — Kafka absorbs bursts and the consumer drains at its own pace.
+- **Postgres still for audit persistence**: Kafka provides durability and decoupling, but the final queryable store is still Postgres (SQL for analytics, indexing by VIN/timestamp).
+
 ### Why NOT:
-- **No Kafka/RabbitMQ**: Synchronous BFF; no events to publish
-- **No Redis**: Postgres-backed cache unifies the persistence story
 - **No Kubernetes**: Take-home is local-runnable; Docker Compose eliminates setup friction
-- **No GORM**: sqlc/pgx gives visible SQL; no hidden N+1 queries
+- **GORM used selectively**: Kafka consumer uses GORM for audit persistence (structured inserts with ON CONFLICT). Hot-path queries (health check, cache) use pgx directly for control.
 - **No errgroup.WithContext for fan-out**: That cancels siblings on first error — wrong for partial success
+- **No RabbitMQ**: Kafka's log-based retention gives replay capability; RabbitMQ is fire-and-forget
 
 ## 6. Resiliency Design
 
@@ -122,10 +139,26 @@ The Unified Document Viewer is a backend aggregation service that consolidates v
 
 **Key invariant**: per-source timeout + retry < overall deadline is NOT guaranteed (800+~100+800 = 1700ms > 1500ms). This is intentional — the deadline is the absolute cap. If the first attempt uses most of the budget, the retry is cancelled by the deadline context.
 
-## 7. Persistence Model
+## 7. Persistence & Messaging Model
 
+### Redis Cache
+```
+Key:    cache:{vin}:{source}
+Value:  JSON { "documents": [...], "fetched_at": "..." }
+TTL:    1 hour (configurable via REDIS_CACHE_TTL_MS)
+```
+
+### Kafka Topic
+```
+Topic:      audit-requests
+Key:        request_id
+Value:      JSON { RequestID, VIN, HTTPStatus, DurationMs, Outcomes }
+Partitions: 1 (expandable for throughput)
+```
+
+### PostgreSQL (Audit Persistence)
 ```sql
--- Append-only audit trail
+-- Populated by Kafka consumer (eventually consistent)
 CREATE TABLE audit_request (
     request_id  TEXT PRIMARY KEY,
     vin         TEXT NOT NULL,
@@ -133,15 +166,6 @@ CREATE TABLE audit_request (
     http_status INT NOT NULL,
     duration_ms INT NOT NULL,
     outcomes    JSONB NOT NULL  -- [{name, status, error?}]
-);
-
--- Last-known-good response cache per (VIN, source)
-CREATE TABLE cached_response (
-    vin        TEXT NOT NULL,
-    source     TEXT NOT NULL,
-    payload    JSONB NOT NULL,  -- serialized []Document
-    fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (vin, source)
 );
 ```
 
@@ -172,11 +196,15 @@ CREATE TABLE cached_response (
 
 | Scale | What Changes |
 |-------|-------------|
-| 0–10 rps (current) | Single process, Postgres, Docker Compose |
-| 10–1000 rps | Connection pool (pgbouncer), Redis cache tier, horizontal LB |
-| 1000+ rps | Async audit (Kafka), regional read replicas, per-source rate limiting |
+| 0–10 rps (current) | Single process, Redis cache, Kafka single-partition, Docker Compose |
+| 10–1000 rps | Horizontal app instances behind LB, Kafka partition scale-out, Redis cluster mode |
+| 1000+ rps | Regional Redis replicas, Kafka multi-partition with consumer groups, Postgres read replicas for audit queries |
 
-The architecture supports horizontal scaling without structural changes — the service is stateless (cache/audit are in Postgres, not in-process).
+The architecture supports horizontal scaling without structural changes:
+- **App is stateless** — cache in Redis, audit in Kafka, persistence in Postgres
+- **Redis cache** handles 100k+ ops/sec per instance; cluster mode for HA
+- **Kafka** absorbs write bursts; add partitions + consumers for throughput
+- **Postgres** is the cold-path query store (not on the hot request path)
 
 ## 10. Future Considerations
 
@@ -204,7 +232,8 @@ AI (Claude) assisted throughout the design phase:
 
 **What was rejected/modified:**
 - Initial suggestion of `errgroup.WithContext` for fan-out was rejected — it cancels siblings on first error, violating partial-success semantics
-- Suggestion of Redis cache was rejected — Postgres cache unifies the persistence story for a take-home
+- Initial Postgres-only cache was later replaced with Redis for sub-ms reads and native TTL expiry
+- Synchronous audit INSERT was replaced with Kafka async producer to decouple from request path
 - goose Docker image (ghcr.io) was unavailable in practice — replaced with psql-based migrations
 
 **Quality ownership:**

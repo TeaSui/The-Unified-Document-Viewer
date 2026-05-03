@@ -18,6 +18,11 @@ type Config struct {
 	RequestDeadline  time.Duration
 	BreakerThreshold uint32
 	OTLPEndpoint     string
+
+	RedisURL      string
+	RedisCacheTTL time.Duration
+	KafkaBrokers  string
+	KafkaTopic    string
 }
 
 func Load() (*Config, error) {
@@ -51,6 +56,23 @@ func Load() (*Config, error) {
 		otlpEndpoint = "localhost:4317"
 	}
 
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL == "" {
+		redisURL = "redis://localhost:6379"
+	}
+
+	redisCacheTTL := parseDuration("REDIS_CACHE_TTL_MS", 3600000)
+
+	kafkaBrokers := os.Getenv("KAFKA_BROKERS")
+	if kafkaBrokers == "" {
+		kafkaBrokers = "localhost:9092"
+	}
+
+	kafkaTopic := os.Getenv("KAFKA_AUDIT_TOPIC")
+	if kafkaTopic == "" {
+		kafkaTopic = "audit-requests"
+	}
+
 	return &Config{
 		Port:             port,
 		DatabaseURL:      dbURL,
@@ -61,6 +83,10 @@ func Load() (*Config, error) {
 		RequestDeadline:  requestDeadline,
 		BreakerThreshold: breakerThreshold,
 		OTLPEndpoint:     otlpEndpoint,
+		RedisURL:         redisURL,
+		RedisCacheTTL:    redisCacheTTL,
+		KafkaBrokers:     kafkaBrokers,
+		KafkaTopic:       kafkaTopic,
 	}, nil
 }
 

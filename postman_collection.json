@@ -1,0 +1,511 @@
+{
+	"info": {
+		"_postman_id": "udv-2026-05-03",
+		"name": "Unified Document Viewer",
+		"description": "Vehicle document aggregation API — all workflows including fault injection via WireMock admin API.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:8080"
+		},
+		{
+			"key": "salesMockAdmin",
+			"value": "http://localhost:9001/__admin"
+		},
+		{
+			"key": "serviceMockAdmin",
+			"value": "http://localhost:9002/__admin"
+		},
+		{
+			"key": "testVin",
+			"value": "1HGCM82633A004352"
+		},
+		{
+			"key": "uncachedVin",
+			"value": "3HGCM82633A004352"
+		},
+		{
+			"key": "jaegerUrl",
+			"value": "http://localhost:16686"
+		}
+	],
+	"item": [
+		{
+			"name": "1. Health Checks",
+			"item": [
+				{
+					"name": "Liveness - GET /healthz",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/healthz",
+							"host": ["{{baseUrl}}"],
+							"path": ["healthz"]
+						}
+					}
+				},
+				{
+					"name": "Readiness - GET /readyz",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/readyz",
+							"host": ["{{baseUrl}}"],
+							"path": ["readyz"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "2. Happy Path",
+			"item": [
+				{
+					"name": "Search Documents (Both Sources OK)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/vehicles/{{testVin}}/documents",
+							"host": ["{{baseUrl}}"],
+							"path": ["vehicles", "{{testVin}}", "documents"]
+						},
+						"description": "Returns 6 documents (3 sales + 3 service), sorted by date descending, both sources 'ok'."
+					}
+				}
+			]
+		},
+		{
+			"name": "3. Invalid VIN",
+			"item": [
+				{
+					"name": "Too Short VIN (400)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/vehicles/INVALID/documents",
+							"host": ["{{baseUrl}}"],
+							"path": ["vehicles", "INVALID", "documents"]
+						},
+						"description": "Returns 400 with error code 'invalid_vin'."
+					}
+				},
+				{
+					"name": "Contains Forbidden Char I (400)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/vehicles/1HGCM82633I004352/documents",
+							"host": ["{{baseUrl}}"],
+							"path": ["vehicles", "1HGCM82633I004352", "documents"]
+						},
+						"description": "VIN contains 'I' which is excluded per ISO 3779."
+					}
+				},
+				{
+					"name": "Lowercase VIN (400)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/vehicles/1hgcm82633a004352/documents",
+							"host": ["{{baseUrl}}"],
+							"path": ["vehicles", "1hgcm82633a004352", "documents"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "4. Partial Failure (5xx)",
+			"item": [
+				{
+					"name": "Step 1: Inject 500 on Sales Mock",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\"priority\":0,\"request\":{\"method\":\"GET\",\"urlPathPattern\":\"/api/v1/vehicles/.*/documents\"},\"response\":{\"status\":500,\"body\":\"{\\\"error\\\":\\\"simulated\\\"}\"}}"
+						},
+						"url": {
+							"raw": "{{salesMockAdmin}}/mappings",
+							"host": ["{{salesMockAdmin}}"],
+							"path": ["mappings"]
+						},
+						"description": "Makes sales mock return 500 for all document requests."
+					}
+				},
+				{
+					"name": "Step 2: Fetch Documents (Sales stale/failed)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/vehicles/{{testVin}}/documents",
+							"host": ["{{baseUrl}}"],
+							"path": ["vehicles", "{{testVin}}", "documents"]
+						},
+						"description": "Sales will be 'stale' (if cached) or 'failed'. Service returns ok."
+					}
+				},
+				{
+					"name": "Step 3: Reset Sales Mock",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{salesMockAdmin}}/mappings/reset",
+							"host": ["{{salesMockAdmin}}"],
+							"path": ["mappings", "reset"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "5. Partial Failure (Timeout)",
+			"item": [
+				{
+					"name": "Step 1: Inject 2000ms Delay on Service Mock",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\"priority\":0,\"request\":{\"method\":\"GET\",\"urlPathPattern\":\"/api/v1/vehicles/.*/documents\"},\"response\":{\"status\":200,\"fixedDelayMilliseconds\":2000,\"headers\":{\"Content-Type\":\"application/json\"},\"body\":\"{\\\"documents\\\":[]}\"}}"
+						},
+						"url": {
+							"raw": "{{serviceMockAdmin}}/mappings",
+							"host": ["{{serviceMockAdmin}}"],
+							"path": ["mappings"]
+						},
+						"description": "Service mock will respond after 2000ms (exceeds 800ms timeout)."
+					}
+				},
+				{
+					"name": "Step 2: Fetch Documents (Service times out)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/vehicles/{{testVin}}/documents",
+							"host": ["{{baseUrl}}"],
+							"path": ["vehicles", "{{testVin}}", "documents"]
+						},
+						"description": "Service will timeout. Response time capped at ~1500ms (overall deadline). Sales ok."
+					}
+				},
+				{
+					"name": "Step 3: Reset Service Mock",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{serviceMockAdmin}}/mappings/reset",
+							"host": ["{{serviceMockAdmin}}"],
+							"path": ["mappings", "reset"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "6. Total Failure (No Cache → 502)",
+			"item": [
+				{
+					"name": "Step 1: Inject 500 on Both Mocks",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\"priority\":0,\"request\":{\"method\":\"GET\",\"urlPathPattern\":\"/api/v1/vehicles/.*/documents\"},\"response\":{\"status\":500,\"body\":\"{\\\"error\\\":\\\"simulated\\\"}\"}}"
+						},
+						"url": {
+							"raw": "{{salesMockAdmin}}/mappings",
+							"host": ["{{salesMockAdmin}}"],
+							"path": ["mappings"]
+						}
+					}
+				},
+				{
+					"name": "Step 1b: Inject 500 on Service Mock",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\"priority\":0,\"request\":{\"method\":\"GET\",\"urlPathPattern\":\"/api/v1/vehicles/.*/documents\"},\"response\":{\"status\":500,\"body\":\"{\\\"error\\\":\\\"simulated\\\"}\"}}"
+						},
+						"url": {
+							"raw": "{{serviceMockAdmin}}/mappings",
+							"host": ["{{serviceMockAdmin}}"],
+							"path": ["mappings"]
+						}
+					}
+				},
+				{
+					"name": "Step 2: Fetch Documents (Uncached VIN → 502)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/vehicles/{{uncachedVin}}/documents",
+							"host": ["{{baseUrl}}"],
+							"path": ["vehicles", "{{uncachedVin}}", "documents"]
+						},
+						"description": "Both sources fail, no cache exists for this VIN → 502."
+					}
+				},
+				{
+					"name": "Step 3: Reset Both Mocks",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{salesMockAdmin}}/mappings/reset",
+							"host": ["{{salesMockAdmin}}"],
+							"path": ["mappings", "reset"]
+						}
+					}
+				},
+				{
+					"name": "Step 3b: Reset Service Mock",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{serviceMockAdmin}}/mappings/reset",
+							"host": ["{{serviceMockAdmin}}"],
+							"path": ["mappings", "reset"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "7. Total Failure (With Cache → Stale)",
+			"item": [
+				{
+					"name": "Step 1: Prime Cache (successful call)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/vehicles/{{testVin}}/documents",
+							"host": ["{{baseUrl}}"],
+							"path": ["vehicles", "{{testVin}}", "documents"]
+						},
+						"description": "This populates the cache for the test VIN."
+					}
+				},
+				{
+					"name": "Step 2: Inject 500 on Sales",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\"priority\":0,\"request\":{\"method\":\"GET\",\"urlPathPattern\":\"/api/v1/vehicles/.*/documents\"},\"response\":{\"status\":500,\"body\":\"{\\\"error\\\":\\\"simulated\\\"}\"}}"
+						},
+						"url": {
+							"raw": "{{salesMockAdmin}}/mappings",
+							"host": ["{{salesMockAdmin}}"],
+							"path": ["mappings"]
+						}
+					}
+				},
+				{
+					"name": "Step 2b: Inject 500 on Service",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\"priority\":0,\"request\":{\"method\":\"GET\",\"urlPathPattern\":\"/api/v1/vehicles/.*/documents\"},\"response\":{\"status\":500,\"body\":\"{\\\"error\\\":\\\"simulated\\\"}\"}}"
+						},
+						"url": {
+							"raw": "{{serviceMockAdmin}}/mappings",
+							"host": ["{{serviceMockAdmin}}"],
+							"path": ["mappings"]
+						}
+					}
+				},
+				{
+					"name": "Step 3: Fetch Documents (Both stale from cache → 200)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/vehicles/{{testVin}}/documents",
+							"host": ["{{baseUrl}}"],
+							"path": ["vehicles", "{{testVin}}", "documents"]
+						},
+						"description": "Both sources fail but cache exists → 200 with stale data and fetched_at timestamps."
+					}
+				},
+				{
+					"name": "Step 4: Reset Both Mocks",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{salesMockAdmin}}/mappings/reset",
+							"host": ["{{salesMockAdmin}}"],
+							"path": ["mappings", "reset"]
+						}
+					}
+				},
+				{
+					"name": "Step 4b: Reset Service Mock",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{serviceMockAdmin}}/mappings/reset",
+							"host": ["{{serviceMockAdmin}}"],
+							"path": ["mappings", "reset"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "8. Circuit Breaker",
+			"item": [
+				{
+					"name": "Step 1: Inject 500 on Sales",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\"priority\":0,\"request\":{\"method\":\"GET\",\"urlPathPattern\":\"/api/v1/vehicles/.*/documents\"},\"response\":{\"status\":500,\"body\":\"{\\\"error\\\":\\\"simulated\\\"}\"}}"
+						},
+						"url": {
+							"raw": "{{salesMockAdmin}}/mappings",
+							"host": ["{{salesMockAdmin}}"],
+							"path": ["mappings"]
+						}
+					}
+				},
+				{
+					"name": "Step 2: Trip Breaker (call 6 times)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/vehicles/5HGCM82633A004352/documents",
+							"host": ["{{baseUrl}}"],
+							"path": ["vehicles", "5HGCM82633A004352", "documents"]
+						},
+						"description": "Run this 6+ times to trip the breaker (5 consecutive failures threshold). After that, the next call is instant (no HTTP to upstream)."
+					}
+				},
+				{
+					"name": "Step 3: Verify Breaker Open (instant response)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/vehicles/5HGCM82633A004352/documents",
+							"host": ["{{baseUrl}}"],
+							"path": ["vehicles", "5HGCM82633A004352", "documents"]
+						},
+						"description": "Should respond in <50ms (breaker open, no upstream call)."
+					}
+				},
+				{
+					"name": "Step 4: Reset Sales Mock",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{salesMockAdmin}}/mappings/reset",
+							"host": ["{{salesMockAdmin}}"],
+							"path": ["mappings", "reset"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "9. Observability",
+			"item": [
+				{
+					"name": "Prometheus Metrics",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/metrics",
+							"host": ["{{baseUrl}}"],
+							"path": ["metrics"]
+						},
+						"description": "Prometheus text format metrics. Look for upstream_request_total and upstream_request_duration_seconds."
+					}
+				},
+				{
+					"name": "Jaeger - List Traces",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{jaegerUrl}}/api/traces?service=unified-document-viewer&limit=5&lookback=5m",
+							"host": ["{{jaegerUrl}}"],
+							"path": ["api", "traces"],
+							"query": [
+								{"key": "service", "value": "unified-document-viewer"},
+								{"key": "limit", "value": "5"},
+								{"key": "lookback", "value": "5m"}
+							]
+						},
+						"description": "Query recent traces from Jaeger. Each document request should have 3 spans (parent + 2 upstream)."
+					}
+				}
+			]
+		}
+	]
+}

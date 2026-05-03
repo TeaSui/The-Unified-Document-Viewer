@@ -5,7 +5,7 @@ A backend aggregation service that consolidates vehicle documents from multiple 
 ## Quick Start
 
 ```bash
-# Start everything (app, database, mocks, Jaeger, Prometheus)
+# Start everything (app, database, Redis, Kafka, mocks, Jaeger, Prometheus)
 docker compose up --build -d
 
 # Wait for healthy (~15 seconds)
@@ -75,12 +75,15 @@ When one upstream fails, you still get documents from the healthy source (or cac
 | `GET /readyz` | Readiness probe (DB connectivity) |
 | `GET /metrics` | Prometheus metrics |
 
-### Observability UIs
+### Infrastructure UIs & Ports
 
-| Service | URL | Description |
+| Service | URL / Port | Description |
 |---------|-----|-------------|
 | Jaeger | http://localhost:16686 | Distributed traces |
 | Prometheus | http://localhost:9090 | Metrics queries |
+| Redis | localhost:6379 | Cache (use `redis-cli`) |
+| Kafka | localhost:9092 | Audit event broker |
+| Postgres | localhost:5433 | Audit persistence |
 
 ## Testing
 
@@ -126,10 +129,10 @@ curl -X POST http://localhost:9001/__admin/mappings/reset
 See [docs/SYSTEM_DESIGN.md](docs/SYSTEM_DESIGN.md) for the full System Design Document including:
 - Architecture diagram and component responsibilities
 - Data flow for happy path, partial failure, and total failure
-- Technology choices with justifications
+- Technology choices with justifications (Redis cache, Kafka audit, PostgreSQL persistence)
 - Resiliency design (timeout budget, circuit breaker, retry policy)
-- Observability strategy
-- Scaling considerations
+- Observability strategy (OTel tracing, Prometheus metrics, structured logging)
+- Scaling considerations (stateless app, Redis cluster, Kafka partitioning)
 
 ## Project Structure
 
@@ -142,7 +145,7 @@ internal/
   upstream/                  # HTTP clients: base Client + ResilientClient
   aggregator/                # Parallel fan-out, cache fallback, merge/sort
   documents/                 # HTTP handler (validate → aggregate → respond)
-  repository/                # Postgres: audit + cache repositories
+  repository/                # Redis cache + Kafka audit producer/consumer + Postgres audit persistence
   health/                    # Liveness and readiness probes
   observability/             # OTel tracing, metrics, middleware
   platform/postgres/         # Connection pool factory
