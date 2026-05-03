@@ -17,6 +17,7 @@ import (
 	"github.com/tungnguyen/unified-document-viewer/internal/documents"
 	"github.com/tungnguyen/unified-document-viewer/internal/health"
 	"github.com/tungnguyen/unified-document-viewer/internal/platform/postgres"
+	"github.com/tungnguyen/unified-document-viewer/internal/repository"
 	"github.com/tungnguyen/unified-document-viewer/internal/upstream"
 )
 
@@ -45,12 +46,18 @@ func run() error {
 	}
 	defer pool.Close()
 
+	cacheRepo := repository.NewCacheRepository(pool)
+	auditRepo := repository.NewAuditRepository(pool)
+
 	httpClient := &http.Client{Timeout: 5 * time.Second}
 	salesClient := upstream.NewClient(cfg.SalesMockURL, "sales", httpClient)
 	serviceClient := upstream.NewClient(cfg.ServiceMockURL, "service", httpClient)
 
-	aggService := aggregator.NewService([]aggregator.Source{salesClient, serviceClient})
-	docsHandler := documents.NewHandler(aggService)
+	aggService := aggregator.NewService(
+		[]aggregator.Source{salesClient, serviceClient},
+		aggregator.WithCache(cacheRepo),
+	)
+	docsHandler := documents.NewHandler(aggService, documents.WithAudit(auditRepo))
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
