@@ -12,9 +12,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/tungnguyen/unified-document-viewer/internal/aggregator"
 	"github.com/tungnguyen/unified-document-viewer/internal/config"
+	"github.com/tungnguyen/unified-document-viewer/internal/documents"
 	"github.com/tungnguyen/unified-document-viewer/internal/health"
 	"github.com/tungnguyen/unified-document-viewer/internal/platform/postgres"
+	"github.com/tungnguyen/unified-document-viewer/internal/upstream"
 )
 
 func main() {
@@ -42,6 +45,13 @@ func run() error {
 	}
 	defer pool.Close()
 
+	httpClient := &http.Client{Timeout: 5 * time.Second}
+	salesClient := upstream.NewClient(cfg.SalesMockURL, "sales", httpClient)
+	serviceClient := upstream.NewClient(cfg.ServiceMockURL, "service", httpClient)
+
+	aggService := aggregator.NewService([]aggregator.Source{salesClient, serviceClient})
+	docsHandler := documents.NewHandler(aggService)
+
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
@@ -50,6 +60,7 @@ func run() error {
 	healthHandler := health.NewHandler(pool)
 	r.Get("/healthz", healthHandler.Liveness)
 	r.Get("/readyz", healthHandler.Readiness)
+	r.Get("/vehicles/{vin}/documents", docsHandler.GetDocuments)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,

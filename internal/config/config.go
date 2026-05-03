@@ -6,8 +6,10 @@ import (
 )
 
 type Config struct {
-	Port        string
-	DatabaseURL string
+	Port           string
+	DatabaseURL    string
+	SalesMockURL   string
+	ServiceMockURL string
 }
 
 func Load() (*Config, error) {
@@ -21,8 +23,20 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("DATABASE_URL environment variable is required")
 	}
 
+	salesURL := os.Getenv("SALES_MOCK_URL")
+	if salesURL == "" {
+		salesURL = "http://localhost:9001"
+	}
+
+	serviceURL := os.Getenv("SERVICE_MOCK_URL")
+	if serviceURL == "" {
+		serviceURL = "http://localhost:9002"
+	}
+
 	return &Config{
-		Port:        port,
-		DatabaseURL: dbURL,
+		Port:           port,
+		DatabaseURL:    dbURL,
+		SalesMockURL:   salesURL,
+		ServiceMockURL: serviceURL,
 	}, nil
 }
