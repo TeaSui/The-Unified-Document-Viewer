@@ -8,8 +8,36 @@ import (
 	"time"
 
 	"github.com/sony/gobreaker"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 	"github.com/tungnguyen/unified-document-viewer/internal/domain"
 )
+
+var (
+	upstreamTracer  = otel.Tracer("upstream")
+	upstreamMeter   = otel.Meter("upstream")
+	upstreamLatency metric.Float64Histogram
+	upstreamCalls   metric.Int64Counter
+)
+
+func init() {
+	var err error
+	upstreamLatency, err = upstreamMeter.Float64Histogram("upstream.request.duration",
+		metric.WithDescription("Upstream request duration in seconds"),
+		metric.WithUnit("s"),
+	)
+	if err != nil {
+		panic(err)
+	}
+	upstreamCalls, err = upstreamMeter.Int64Counter("upstream.request.total",
+		metric.WithDescription("Total upstream requests"),
+	)
+	if err != nil {
+		panic(err)
+	}
+}
 
 type ResiliencyConfig struct {
 	Timeout          time.Duration
@@ -46,9 +74,37 @@ func (rc *ResilientClient) Name() string {
 }
 
 func (rc *ResilientClient) Fetch(ctx context.Context, vin string) ([]domain.Document, error) {
+	ctx, span := upstreamTracer.Start(ctx, "upstream."+rc.inner.Name(),
+		trace.WithAttributes(
+			attribute.String("upstream.source", rc.inner.Name()),
+			attribute.String("upstream.vin_suffix", vinSuffix(vin)),
+		),
+	)
+	defer span.End()
+
+	start := time.Now()
+
 	result, err := rc.breaker.Execute(func() (interface{}, error) {
 		return rc.fetchWithRetry(ctx, vin)
 	})
+
+	duration := time.Since(start).Seconds()
+	outcome := "ok"
+	if err != nil {
+		outcome = classifyError(err)
+		span.SetAttributes(attribute.String("upstream.outcome", outcome))
+		span.RecordError(err)
+	} else {
+		span.SetAttributes(attribute.String("upstream.outcome", "ok"))
+	}
+
+	attrs := metric.WithAttributes(
+		attribute.String("source", rc.inner.Name()),
+		attribute.String("outcome", outcome),
+	)
+	upstreamLatency.Record(ctx, duration, attrs)
+	upstreamCalls.Add(ctx, 1, attrs)
+
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +117,6 @@ func (rc *ResilientClient) fetchWithRetry(ctx context.Context, vin string) ([]do
 		return docs, nil
 	}
 
-	// One retry with jittered backoff
 	jitter := time.Duration(rand.Int64N(int64(rc.config.RetryBaseDelay)))
 	delay := rc.config.RetryBaseDelay + jitter
 
@@ -86,4 +141,21 @@ func (rc *ResilientClient) doFetch(ctx context.Context, vin string) ([]domain.Do
 		return nil, err
 	}
 	return docs, nil
+}
+
+func classifyError(err error) string {
+	if err == gobreaker.ErrOpenState || err == gobreaker.ErrTooManyRequests {
+		return "circuit_open"
+	}
+	if err == context.DeadlineExceeded {
+		return "timeout"
+	}
+	return "failed"
+}
+
+func vinSuffix(vin string) string {
+	if len(vin) <= 6 {
+		return vin
+	}
+	return vin[len(vin)-6:]
 }
