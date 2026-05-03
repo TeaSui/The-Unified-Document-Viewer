@@ -331,3 +331,77 @@ func TestService_WithDeadlineOption(t *testing.T) {
 		t.Errorf("expected 2 docs, got %d", len(result.Documents))
 	}
 }
+
+func TestService_EmptyDocumentsFromBothSources(t *testing.T) {
+	sales := &fakeSource{name: "sales", docs: []domain.Document{}}
+	service := &fakeSource{name: "service", docs: []domain.Document{}}
+
+	svc := aggregator.NewService([]aggregator.Source{sales, service})
+	result, err := svc.Aggregate(context.Background(), "1HGCM82633A004352")
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Documents) != 0 {
+		t.Errorf("expected 0 documents, got %d", len(result.Documents))
+	}
+	if result.VIN != "1HGCM82633A004352" {
+		t.Errorf("expected VIN in result, got %s", result.VIN)
+	}
+}
+
+func TestService_DocumentsWithSameDateStableOrder(t *testing.T) {
+	sameDate := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
+	sales := &fakeSource{
+		name: "sales",
+		docs: []domain.Document{
+			{ID: "S1", Source: "sales", Date: sameDate},
+			{ID: "S2", Source: "sales", Date: sameDate},
+		},
+	}
+	service := &fakeSource{
+		name: "service",
+		docs: []domain.Document{
+			{ID: "V1", Source: "service", Date: sameDate},
+		},
+	}
+
+	svc := aggregator.NewService([]aggregator.Source{sales, service})
+	result, err := svc.Aggregate(context.Background(), "1HGCM82633A004352")
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Documents) != 3 {
+		t.Fatalf("expected 3 documents, got %d", len(result.Documents))
+	}
+}
+
+func TestService_SingleSourceReturnsMany(t *testing.T) {
+	sales := &fakeSource{
+		name: "sales",
+		docs: []domain.Document{
+			{ID: "S1", Source: "sales", Date: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)},
+			{ID: "S2", Source: "sales", Date: time.Date(2024, 12, 1, 0, 0, 0, 0, time.UTC)},
+			{ID: "S3", Source: "sales", Date: time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)},
+		},
+	}
+	service := &fakeSource{name: "service", err: fmt.Errorf("down")}
+
+	svc := aggregator.NewService([]aggregator.Source{sales, service})
+	result, err := svc.Aggregate(context.Background(), "1HGCM82633A004352")
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Documents) != 3 {
+		t.Fatalf("expected 3 docs, got %d", len(result.Documents))
+	}
+	// Dec > Jun > Jan
+	expected := []string{"S2", "S3", "S1"}
+	for i, id := range expected {
+		if result.Documents[i].ID != id {
+			t.Errorf("position %d: expected %s, got %s", i, id, result.Documents[i].ID)
+		}
+	}
+}
