@@ -1,0 +1,132 @@
+{
+  "mappings": [
+    {
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/api/v1/vehicles/([A-HJ-NPR-Z0-9]{17})/documents"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "jsonBody": {
+          "documents": [
+            {
+              "id": "SVC-001-{{request.pathSegments.[3]}}",
+              "vin": "{{request.pathSegments.[3]}}",
+              "type": "service_record",
+              "title": "Regular Maintenance - 10,000km",
+              "date": "2024-03-20T08:00:00Z",
+              "metadata": {
+                "service_center": "Downtown Auto Care",
+                "technician": "R. Lee",
+                "mileage_km": 10000
+              }
+            },
+            {
+              "id": "SVC-002-{{request.pathSegments.[3]}}",
+              "vin": "{{request.pathSegments.[3]}}",
+              "type": "inspection_report",
+              "title": "Annual Safety Inspection",
+              "date": "2024-06-10T14:30:00Z",
+              "metadata": {
+                "service_center": "Downtown Auto Care",
+                "inspector": "A. Patel",
+                "result": "pass"
+              }
+            },
+            {
+              "id": "SVC-003-{{request.pathSegments.[3]}}",
+              "vin": "{{request.pathSegments.[3]}}",
+              "type": "warranty_claim",
+              "title": "Warranty Repair - AC Compressor",
+              "date": "2024-08-05T11:15:00Z",
+              "metadata": {
+                "service_center": "Keyloop Service Hub",
+                "claim_number": "WC-2024-7891",
+                "status": "approved"
+              }
+            }
+          ]
+        },
+        "transformers": ["response-template"]
+      }
+    },
+    {
+      "priority": 1,
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/api/v1/vehicles/([A-HJ-NPR-Z0-9]{17})/documents",
+        "headers": {
+          "X-Mock-Latency": {
+            "matches": ".+"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "fixedDelayMilliseconds": "{{request.headers.X-Mock-Latency}}",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "jsonBody": {
+          "documents": [
+            {
+              "id": "SVC-001-{{request.pathSegments.[3]}}",
+              "vin": "{{request.pathSegments.[3]}}",
+              "type": "service_record",
+              "title": "Regular Maintenance - 10,000km",
+              "date": "2024-03-20T08:00:00Z",
+              "metadata": {
+                "service_center": "Downtown Auto Care",
+                "technician": "R. Lee",
+                "mileage_km": 10000
+              }
+            }
+          ]
+        },
+        "transformers": ["response-template"]
+      }
+    },
+    {
+      "priority": 1,
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/api/v1/vehicles/([A-HJ-NPR-Z0-9]{17})/documents",
+        "headers": {
+          "X-Mock-Fault": {
+            "equalTo": "500"
+          }
+        }
+      },
+      "response": {
+        "status": 500,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"error\":\"internal_server_error\",\"message\":\"simulated failure\"}"
+      }
+    },
+    {
+      "priority": 1,
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/api/v1/vehicles/([A-HJ-NPR-Z0-9]{17})/documents",
+        "headers": {
+          "X-Mock-Fault": {
+            "equalTo": "timeout"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "fixedDelayMilliseconds": 5000,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"documents\":[]}"
+      }
+    }
+  ]
+}
