@@ -9,7 +9,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"go.opentelemetry.io/otel/trace"
 	"github.com/tungnguyen/unified-document-viewer/internal/domain"
+	"github.com/tungnguyen/unified-document-viewer/internal/observability"
 	"github.com/tungnguyen/unified-document-viewer/internal/vin"
 )
 
@@ -61,6 +63,8 @@ func (h *Handler) GetDocuments(w http.ResponseWriter, r *http.Request) {
 	result, err := h.aggregator.Aggregate(r.Context(), vinParam)
 
 	requestID := middleware.GetReqID(r.Context())
+	traceID := trace.SpanFromContext(r.Context()).SpanContext().TraceID().String()
+	maskedVIN := observability.MaskVIN(vinParam)
 
 	if err != nil {
 		w.WriteHeader(http.StatusBadGateway)
@@ -70,6 +74,12 @@ func (h *Handler) GetDocuments(w http.ResponseWriter, r *http.Request) {
 				Message: "all upstream sources failed",
 			},
 		})
+		slog.Warn("aggregation failed",
+			"request_id", requestID,
+			"trace_id", traceID,
+			"vin", maskedVIN,
+			"duration_ms", time.Since(start).Milliseconds(),
+		)
 		h.writeAudit(r.Context(), requestID, vinParam, http.StatusBadGateway, start, nil)
 		return
 	}
@@ -88,6 +98,15 @@ func (h *Handler) GetDocuments(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(envelope)
+
+	slog.Info("documents served",
+		"request_id", requestID,
+		"trace_id", traceID,
+		"vin", maskedVIN,
+		"doc_count", len(result.Documents),
+		"sources", sourcesSummary(result.Sources),
+		"duration_ms", time.Since(start).Milliseconds(),
+	)
 	h.writeAudit(r.Context(), requestID, vinParam, http.StatusOK, start, result.Sources)
 }
 
@@ -107,4 +126,15 @@ func (h *Handler) writeAudit(ctx context.Context, requestID, vinStr string, stat
 	if err := h.audit.Insert(ctx, entry); err != nil {
 		slog.Warn("audit write failed", "error", err, "request_id", requestID)
 	}
+}
+
+func sourcesSummary(sources []domain.SourceStatus) string {
+	result := ""
+	for i, s := range sources {
+		if i > 0 {
+			result += ","
+		}
+		result += s.Name + ":" + s.Status
+	}
+	return result
 }
