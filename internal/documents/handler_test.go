@@ -208,3 +208,89 @@ func TestHandler_AuditLogWritten(t *testing.T) {
 		t.Errorf("expected 1 outcome, got %d", len(entry.Outcomes))
 	}
 }
+
+func TestHandler_EnvelopeStructure(t *testing.T) {
+	now := time.Date(2024, 6, 15, 10, 30, 0, 0, time.UTC)
+	agg := &fakeAggregator{
+		result: &domain.AggregateResult{
+			VIN: "1HGCM82633A004352",
+			Documents: []domain.Document{
+				{
+					ID:     "SALE-001",
+					VIN:    "1HGCM82633A004352",
+					Source: "sales",
+					Type:   "purchase_agreement",
+					Title:  "Purchase Agreement",
+					Date:   now,
+					Metadata: map[string]any{
+						"dealer_id": "DLR-042",
+					},
+				},
+				{
+					ID:     "SVC-001",
+					VIN:    "1HGCM82633A004352",
+					Source: "service",
+					Type:   "service_record",
+					Title:  "Maintenance",
+					Date:   now.Add(-24 * time.Hour),
+				},
+			},
+			Sources: []domain.SourceStatus{
+				{Name: "sales", Status: "ok"},
+				{Name: "service", Status: "ok"},
+			},
+		},
+	}
+
+	handler := documents.NewHandler(agg)
+	r := newTestRouter(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/vehicles/1HGCM82633A004352/documents", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var envelope domain.DocumentsEnvelope
+	if err := json.NewDecoder(rec.Body).Decode(&envelope); err != nil {
+		t.Fatalf("failed to decode: %v", err)
+	}
+
+	// Verify data.vin
+	if envelope.Data.VIN != "1HGCM82633A004352" {
+		t.Errorf("data.vin: expected 1HGCM82633A004352, got %s", envelope.Data.VIN)
+	}
+
+	// Verify documents array
+	if len(envelope.Data.Documents) != 2 {
+		t.Fatalf("expected 2 documents, got %d", len(envelope.Data.Documents))
+	}
+	doc := envelope.Data.Documents[0]
+	if doc.ID != "SALE-001" {
+		t.Errorf("doc[0].id: expected SALE-001, got %s", doc.ID)
+	}
+	if doc.Source != "sales" {
+		t.Errorf("doc[0].source: expected sales, got %s", doc.Source)
+	}
+	if doc.Type != "purchase_agreement" {
+		t.Errorf("doc[0].type: expected purchase_agreement, got %s", doc.Type)
+	}
+
+	// Verify sources array
+	if len(envelope.Data.Sources) != 2 {
+		t.Fatalf("expected 2 sources, got %d", len(envelope.Data.Sources))
+	}
+	if envelope.Data.Sources[0].Name != "sales" || envelope.Data.Sources[0].Status != "ok" {
+		t.Errorf("sources[0]: expected sales/ok, got %s/%s", envelope.Data.Sources[0].Name, envelope.Data.Sources[0].Status)
+	}
+
+	// Verify meta
+	if envelope.Meta.RequestID == "" {
+		t.Error("meta.request_id should not be empty")
+	}
+	if envelope.Meta.Timestamp.IsZero() {
+		t.Error("meta.timestamp should not be zero")
+	}
+}
