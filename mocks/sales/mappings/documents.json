@@ -1,0 +1,128 @@
+{
+  "mappings": [
+    {
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/api/v1/vehicles/([A-HJ-NPR-Z0-9]{17})/documents"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "jsonBody": {
+          "documents": [
+            {
+              "id": "SALE-001-{{request.pathSegments.[3]}}",
+              "vin": "{{request.pathSegments.[3]}}",
+              "type": "purchase_agreement",
+              "title": "Vehicle Purchase Agreement",
+              "date": "2024-01-15T10:30:00Z",
+              "metadata": {
+                "dealer_id": "DLR-042",
+                "salesperson": "J. Smith"
+              }
+            },
+            {
+              "id": "SALE-002-{{request.pathSegments.[3]}}",
+              "vin": "{{request.pathSegments.[3]}}",
+              "type": "finance_contract",
+              "title": "Finance Agreement",
+              "date": "2024-01-15T11:00:00Z",
+              "metadata": {
+                "dealer_id": "DLR-042",
+                "finance_provider": "AutoLend Corp"
+              }
+            },
+            {
+              "id": "SALE-003-{{request.pathSegments.[3]}}",
+              "vin": "{{request.pathSegments.[3]}}",
+              "type": "trade_in_appraisal",
+              "title": "Trade-In Appraisal Report",
+              "date": "2024-01-14T09:00:00Z",
+              "metadata": {
+                "dealer_id": "DLR-042",
+                "appraiser": "M. Johnson"
+              }
+            }
+          ]
+        },
+        "transformers": ["response-template"]
+      }
+    },
+    {
+      "priority": 1,
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/api/v1/vehicles/([A-HJ-NPR-Z0-9]{17})/documents",
+        "headers": {
+          "X-Mock-Latency": {
+            "matches": ".+"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "fixedDelayMilliseconds": "{{request.headers.X-Mock-Latency}}",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "jsonBody": {
+          "documents": [
+            {
+              "id": "SALE-001-{{request.pathSegments.[3]}}",
+              "vin": "{{request.pathSegments.[3]}}",
+              "type": "purchase_agreement",
+              "title": "Vehicle Purchase Agreement",
+              "date": "2024-01-15T10:30:00Z",
+              "metadata": {
+                "dealer_id": "DLR-042",
+                "salesperson": "J. Smith"
+              }
+            }
+          ]
+        },
+        "transformers": ["response-template"]
+      }
+    },
+    {
+      "priority": 1,
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/api/v1/vehicles/([A-HJ-NPR-Z0-9]{17})/documents",
+        "headers": {
+          "X-Mock-Fault": {
+            "equalTo": "500"
+          }
+        }
+      },
+      "response": {
+        "status": 500,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"error\":\"internal_server_error\",\"message\":\"simulated failure\"}"
+      }
+    },
+    {
+      "priority": 1,
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/api/v1/vehicles/([A-HJ-NPR-Z0-9]{17})/documents",
+        "headers": {
+          "X-Mock-Fault": {
+            "equalTo": "timeout"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "fixedDelayMilliseconds": 5000,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"documents\":[]}"
+      }
+    }
+  ]
+}
